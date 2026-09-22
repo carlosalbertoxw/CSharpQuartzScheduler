@@ -4,8 +4,13 @@ using CSharpQuartzScheduler.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Quartz;
 using Serilog;
+
+// Un servicio de Windows arranca en C:\Windows\System32: fijamos la carpeta del ejecutable
+// para que las rutas relativas (p. ej. logs/) queden junto al .exe.
+Directory.SetCurrentDirectory(AppContext.BaseDirectory);
 
 // Logger de arranque: registra fallos que ocurran antes de construir el host.
 Log.Logger = new LoggerConfiguration()
@@ -27,39 +32,57 @@ try
         .ReadFrom.Services(services)
         .Enrich.FromLogContext());
 
-    // Opciones fuertemente tipadas y validadas al arrancar.
+    // Servicios de negocio: cada rutina de appsettings.json referencia uno por su clave ("Service").
+    builder.Services.AddKeyedScoped<IRoutineService, RoutineService>(RoutineService.Key);
+    builder.Services.AddKeyedScoped<IRoutineService, DailyReportService>(DailyReportService.Key);
+    builder.Services.AddKeyedScoped<IRoutineService, ReportCleanupService>(ReportCleanupService.Key);
+
+    // Dependencias de las rutinas de reportes.
+    builder.Services.AddSingleton(TimeProvider.System);
     builder.Services
-        .AddOptions<RoutineJobOptions>()
-        .Bind(builder.Configuration.GetSection(RoutineJobOptions.SectionName))
+        .AddOptions<ReportsOptions>()
+        .Bind(builder.Configuration.GetSection(ReportsOptions.SectionName))
         .ValidateDataAnnotations()
         .ValidateOnStart();
 
-    builder.Services.AddScoped<IRoutineService, RoutineService>();
+    // Opciones fuertemente tipadas y validadas al arrancar.
+    var routinesSection = builder.Configuration.GetSection(RoutinesOptions.SectionName);
+    builder.Services
+        .AddOptions<RoutinesOptions>()
+        .Configure(options => routinesSection.Bind(options.Jobs))
+        .ValidateOnStart();
+    builder.Services.AddSingleton<IValidateOptions<RoutinesOptions>, RoutinesOptionsValidator>();
 
-    // Registro de Quartz vía DI + hosted service.
+    // Registro de Quartz vía DI + hosted service: un job y un trigger por rutina habilitada.
+    var routines = routinesSection.Get<List<RoutineOptions>>() ?? [];
     builder.Services.AddQuartz(q =>
     {
-        var options = builder.Configuration
-            .GetSection(RoutineJobOptions.SectionName)
-            .Get<RoutineJobOptions>() ?? new RoutineJobOptions();
-
-        if (options.Enabled)
+        for (var i = 0; i < routines.Count; i++)
         {
-            var jobKey = new JobKey(options.Name, options.Group);
-
-            q.AddJob<RoutineJob>(opts => opts.WithIdentity(jobKey));
-
-            q.AddTrigger(t =>
+            if (!routines[i].Enabled)
             {
+                continue;
+            }
+
+            var index = i;
+            var jobKey = new JobKey(routines[i].Name, routines[i].Group);
+
+            q.AddJob<RoutineJob>(j => j
+                .WithIdentity(jobKey)
+                .UsingJobData(RoutineJob.ServiceKeyDataKey, routines[index].Service));
+
+            // El trigger se construye al crear el scheduler, a partir de las opciones ya
+            // validadas: un cron o zona horaria inválidos se reportan con un mensaje claro.
+            q.AddTrigger((services, t) =>
+            {
+                var routine = services.GetRequiredService<IOptions<RoutinesOptions>>().Value.Jobs[index];
+
                 t.ForJob(jobKey)
-                 .WithIdentity($"{options.Name}-trigger", options.Group)
-                 .WithCronSchedule(options.CronExpression, cron =>
-                 {
-                     if (!string.IsNullOrWhiteSpace(options.TimeZone))
-                     {
-                         cron.InTimeZone(TimeZoneInfo.FindSystemTimeZoneById(options.TimeZone));
-                     }
-                 });
+                 .WithIdentity($"{routine.Name}-trigger", routine.Group)
+                 .WithCronSchedule(routine.CronExpression, cron => cron
+                     .InTimeZone(routine.ResolveTimeZone())
+                     // Si el servicio estuvo detenido, ignora los disparos perdidos y espera al siguiente.
+                     .WithMisfireInstruction(CronTriggerMisfireInstruction.DoNothing));
             });
         }
     });

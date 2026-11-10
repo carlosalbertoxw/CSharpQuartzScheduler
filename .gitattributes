@@ -1,0 +1,3 @@
+# Finales de linea LF en el repositorio y al hacer checkout (igual en Windows y Linux),
+# coherente con end_of_line = lf de .editorconfig.
+* text=auto eol=lf

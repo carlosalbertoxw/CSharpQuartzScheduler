@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="CSharpQuartzScheduler/CSharpQuartzScheduler.csproj" />
+  <Project Path="CSharpQuartzScheduler.Tests/CSharpQuartzScheduler.Tests.csproj" />
+</Solution>

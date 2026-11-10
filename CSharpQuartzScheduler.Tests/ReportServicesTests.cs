@@ -31,11 +31,11 @@ public sealed class ReportServicesTests : IDisposable
     {
         var service = new DailyReportService(_options, _timeProvider, NullLogger<DailyReportService>.Instance);
 
-        await service.RunAsync(CancellationToken.None);
+        await service.RunAsync(TestContext.Current.CancellationToken);
 
         var file = Path.Combine(_directory, "report-20260922-070000.txt");
         Assert.True(File.Exists(file));
-        Assert.Contains("Reporte generado: 2026-09-22T07:00:00", await File.ReadAllTextAsync(file));
+        Assert.Contains("Reporte generado: 2026-09-22T07:00:00", await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -47,7 +47,7 @@ public sealed class ReportServicesTests : IDisposable
         var unrelated = CreateFile("otro-archivo.txt", Now.AddDays(-30));
 
         var service = new ReportCleanupService(_options, _timeProvider, NullLogger<ReportCleanupService>.Instance);
-        await service.RunAsync(CancellationToken.None);
+        await service.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.False(File.Exists(expired));
         Assert.True(File.Exists(recent));
@@ -59,7 +59,7 @@ public sealed class ReportServicesTests : IDisposable
     {
         var service = new ReportCleanupService(_options, _timeProvider, NullLogger<ReportCleanupService>.Instance);
 
-        await service.RunAsync(CancellationToken.None);
+        await service.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.False(Directory.Exists(_directory));
     }

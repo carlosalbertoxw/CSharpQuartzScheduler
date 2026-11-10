@@ -15,19 +15,23 @@ Proyecto hermano en Java: [JavaQuartzScheduler](https://github.com/carlosalberto
 - Job desacoplado de la lógica de negocio (`IRoutineService` como *keyed service*) para facilitar pruebas.
 - `[DisallowConcurrentExecution]` para evitar solapamiento de ejecuciones de una misma rutina.
 - Disparos perdidos (servicio detenido) se ignoran: se espera al siguiente disparo programado.
-- Pruebas unitarias con xUnit y CI en GitHub Actions.
+- Pruebas con xUnit v3 sobre Microsoft.Testing.Platform, incluida una que compone el host con el `appsettings.json` real.
+- CI en GitHub Actions (Linux y Windows) que valida formato, compila y prueba; Dependabot propone actualizaciones mensuales.
 
 ## Requisitos
 
 - [SDK de .NET 10](https://dotnet.microsoft.com/download/dotnet/10.0).
 - Windows para instalarlo como servicio. Como aplicación de consola corre también en Linux y macOS.
+- Para abrir la solución (`CSharpQuartzScheduler.slnx`) en un IDE: Visual Studio 2022 17.13 o posterior, Visual Studio 2026,
+  Rider o VS Code con C# Dev Kit.
 
 ## Estructura
 
 ```
 .
 ├── CSharpQuartzScheduler/
-│   ├── Program.cs                          # Composición del host, DI y registro de Quartz
+│   ├── Program.cs                          # Composición del host: servicio de Windows, Serilog y Quartz
+│   ├── RoutinesServiceCollectionExtensions.cs # AddRoutines(): servicios, opciones validadas, jobs y triggers
 │   ├── appsettings.json                    # Rutinas, reportes y logging
 │   ├── appsettings.Development.json        # Logging en nivel Debug para desarrollo
 │   ├── Properties/
@@ -40,12 +44,18 @@ Proyecto hermano en Java: [JavaQuartzScheduler](https://github.com/carlosalberto
 │   │   └── RoutineJob.cs                   # IJob: resuelve el servicio y maneja errores/cancelación
 │   └── Services/
 │       ├── IRoutineService.cs              # Contrato de la lógica de negocio
-│       ├── RoutineService.cs               # Rutina mínima de ejemplo ("Example")
+│       ├── ExampleRoutineService.cs        # Rutina mínima de ejemplo ("Example")
 │       ├── DailyReportService.cs           # Genera un reporte de texto ("DailyReport")
 │       └── ReportCleanupService.cs         # Borra reportes antiguos ("ReportCleanup")
-├── CSharpQuartzScheduler.Tests/            # Pruebas unitarias (xUnit + NSubstitute)
-├── .github/workflows/build.yml             # CI: compila y ejecuta las pruebas
-└── .editorconfig                           # Estilo de código
+├── CSharpQuartzScheduler.Tests/            # Pruebas (xUnit v3 + NSubstitute)
+├── .github/
+│   ├── workflows/build.yml                 # CI: formato, compilación y pruebas en Linux y Windows
+│   └── dependabot.yml                      # Actualizaciones mensuales de NuGet y GitHub Actions
+├── CSharpQuartzScheduler.slnx              # Solución (formato XML)
+├── Directory.Build.props                   # Propiedades comunes; advertencias y estilo rompen el build
+├── global.json                             # SDK de .NET 10 y runner de pruebas (Microsoft.Testing.Platform)
+├── .editorconfig                           # Estilo de código
+└── LICENSE                                 # Licencia MIT
 ```
 
 ## Cómo funciona
@@ -54,7 +64,7 @@ Proyecto hermano en Java: [JavaQuartzScheduler](https://github.com/carlosalberto
 appsettings.json ("Routines")
         │  una entrada por rutina
         ▼
-Program.cs ── valida opciones ──► registra en Quartz: JobKey (Group.Name) + trigger cron
+AddRoutines() ── valida opciones ──► registra en Quartz: JobKey (Group.Name) + trigger cron
         │                          (el JobDataMap guarda la clave "Service")
         ▼
 Quartz dispara ──► RoutineJob ──► resuelve IRoutineService por su clave ──► RunAsync()
@@ -68,7 +78,7 @@ Quartz dispara ──► RoutineJob ──► resuelve IRoutineService por su cl
 
 | Situación                          | Comportamiento                                                                                  |
 |------------------------------------|-------------------------------------------------------------------------------------------------|
-| La rutina lanza una excepción      | Se registra una sola vez como `Error` y se relanza como `JobExecutionException`, sin reintento inmediato: el siguiente disparo del cron vuelve a intentarlo. |
+| La rutina lanza una excepción      | `RoutineJob` la relanza como `JobExecutionException` y Quartz la registra una sola vez como `Error`, con la clave del job. No hay reintento inmediato: el siguiente disparo del cron vuelve a intentarlo. |
 | Una ejecución sigue en curso al llegar el siguiente disparo | `[DisallowConcurrentExecution]` evita el solapamiento: el disparo se retrasa hasta que termine la ejecución actual y, si se retrasa más del umbral de *misfire* de Quartz (60 s), se omite. |
 | El servicio estuvo detenido        | Los disparos perdidos se ignoran (`DoNothing`); la rutina corre en su siguiente horario.        |
 | `Ctrl+C` o detener el servicio     | Se cancela el `CancellationToken` y se espera a que las rutinas en curso terminen.              |
@@ -87,7 +97,7 @@ Detén el proceso con `Ctrl+C`: espera a que los jobs en curso terminen antes de
 
 | Rutina          | Servicio (clave)                         | Cuándo corre                                        | Qué hace                                                        |
 |-----------------|------------------------------------------|-----------------------------------------------------|-----------------------------------------------------------------|
-| `RoutineJob`    | `RoutineService` (`Example`)             | Cada minuto (UTC)                                   | Ejemplo mínimo: registra inicio y fin.                          |
+| `Example`       | `ExampleRoutineService` (`Example`)      | Cada minuto (UTC)                                   | Ejemplo mínimo: registra inicio y fin.                          |
 | `DailyReport`   | `DailyReportService` (`DailyReport`)     | Lunes a viernes a las 7:00, `America/Mexico_City`   | Escribe `reports/report-<fecha>.txt` con un resumen del equipo. |
 | `ReportCleanup` | `ReportCleanupService` (`ReportCleanup`) | Todos los días a las 3:30 (UTC)                     | Borra los `report-*.txt` con más de `RetentionDays` días.       |
 
@@ -140,7 +150,8 @@ Configura las rutinas de reportes:
 ### `Serilog`
 
 - Los logs se escriben en consola y en `logs/scheduler-<fecha>.log` junto al ejecutable (también al correr como servicio), con rotación diaria y 14 archivos de retención.
-- El filtro `ByExcluding` descarta el mensaje duplicado de Quartz (`JobRunShell`) cuando una rutina falla, porque `RoutineJob` ya registra ese error con más contexto.
+- Cada línea escrita durante una ejecución incluye la rutina que la generó (propiedad `Routine`, p. ej. `Reports.DailyReport`), útil cuando varias rutinas corren a la vez.
+- Cuando una rutina falla, el error lo registra Quartz (`Quartz.Core.JobRunShell`) con la excepción completa; `RoutineJob` no lo repite.
 
 ## Agregar una rutina
 
@@ -156,9 +167,9 @@ Configura las rutinas de reportes:
        }
    }
    ```
-2. Regístrala con su clave en `Program.cs`:
+2. Regístrala con su clave en `AddRoutines` (`RoutinesServiceCollectionExtensions.cs`):
    ```csharp
-   builder.Services.AddKeyedScoped<IRoutineService, MiRutinaService>(MiRutinaService.Key);
+   services.AddKeyedScoped<IRoutineService, MiRutinaService>(MiRutinaService.Key);
    ```
 3. Agrega una entrada en `Routines`:
    ```json
@@ -185,8 +196,18 @@ dotnet test
 | `RoutineJobTests.cs`               | Resolución del servicio, errores, cancelación y clave faltante.            |
 | `RoutinesOptionsValidatorTests.cs` | Cron, zona horaria, servicio no registrado, duplicados y UTC por defecto.  |
 | `ReportServicesTests.cs`           | Generación de reportes y limpieza por antigüedad.                          |
+| `RoutinesRegistrationTests.cs`     | El `appsettings.json` real es válido y crea un trigger por rutina.         |
 
-El workflow `.github/workflows/build.yml` compila y ejecuta las pruebas en cada push a `master` y en cada pull request.
+`global.json` indica a `dotnet test` que use Microsoft.Testing.Platform (requerido por xUnit v3).
+
+El estilo de `.editorconfig` se aplica al compilar (`EnforceCodeStyleInBuild`) y cualquier advertencia rompe el build. Para revisar o corregir el formato:
+
+```bash
+dotnet format --verify-no-changes
+dotnet format
+```
+
+El workflow `.github/workflows/build.yml` valida el formato, compila y ejecuta las pruebas en Linux y Windows en cada push a `master` y en cada pull request.
 
 ## Instalar como servicio de Windows
 
@@ -213,3 +234,7 @@ sc.exe delete CSharpQuartzScheduler
 - `TimeZone` vacío ahora significa UTC de verdad (antes Quartz usaba la hora local del equipo).
 - `IJob.Execute` en Quartz 4 devuelve `ValueTask` y recibe el `CancellationToken` como parámetro.
 - El paquete `Quartz.Extensions.Hosting` ya no se usa: en Quartz 4 todo está en el paquete `Quartz`.
+
+## Licencia
+
+[MIT](LICENSE).

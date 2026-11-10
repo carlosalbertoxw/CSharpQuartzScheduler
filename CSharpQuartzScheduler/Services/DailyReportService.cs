@@ -1,6 +1,5 @@
 using System.Text;
 using CSharpQuartzScheduler.Configuration;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace CSharpQuartzScheduler.Services;
@@ -10,7 +9,10 @@ namespace CSharpQuartzScheduler.Services;
 /// Muestra cómo una rutina recibe su propia configuración (<see cref="ReportsOptions"/>)
 /// y dependencias (<see cref="TimeProvider"/>) por inyección.
 /// </summary>
-public sealed class DailyReportService : IRoutineService
+public sealed class DailyReportService(
+    IOptions<ReportsOptions> options,
+    TimeProvider timeProvider,
+    ILogger<DailyReportService> logger) : IRoutineService
 {
     /// <summary>Clave con la que se registra el servicio y se referencia en "Routines:Service".</summary>
     public const string Key = "DailyReport";
@@ -18,21 +20,10 @@ public sealed class DailyReportService : IRoutineService
     /// <summary>Prefijo de los archivos de reporte; la limpieza solo borra archivos con este patrón.</summary>
     public const string FilePrefix = "report-";
 
-    private readonly ReportsOptions _options;
-    private readonly TimeProvider _timeProvider;
-    private readonly ILogger<DailyReportService> _logger;
-
-    public DailyReportService(IOptions<ReportsOptions> options, TimeProvider timeProvider, ILogger<DailyReportService> logger)
-    {
-        _options = options.Value;
-        _timeProvider = timeProvider;
-        _logger = logger;
-    }
-
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        var now = _timeProvider.GetUtcNow();
-        var directory = Directory.CreateDirectory(Path.GetFullPath(_options.Directory));
+        var now = timeProvider.GetUtcNow();
+        var directory = Directory.CreateDirectory(Path.GetFullPath(options.Value.Directory));
         var path = Path.Combine(directory.FullName, $"{FilePrefix}{now:yyyyMMdd-HHmmss}.txt");
 
         var content = new StringBuilder()
@@ -45,7 +36,6 @@ public sealed class DailyReportService : IRoutineService
 
         await File.WriteAllTextAsync(path, content, cancellationToken);
 
-        _logger.LogInformation("Reporte diario generado en {ReportPath}", path);
+        logger.LogInformation("Reporte diario generado en {ReportPath}", path);
     }
 }
-

@@ -1,5 +1,4 @@
 using CSharpQuartzScheduler.Services;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Quartz;
 
@@ -10,12 +9,8 @@ namespace CSharpQuartzScheduler.Configuration;
 /// un servicio registrado y una identidad única. Así un error de configuración detiene
 /// el host con un mensaje claro en lugar de fallar dentro de Quartz.
 /// </summary>
-public sealed class RoutinesOptionsValidator : IValidateOptions<RoutinesOptions>
+public sealed class RoutinesOptionsValidator(IServiceProviderIsKeyedService keyedServices) : IValidateOptions<RoutinesOptions>
 {
-    private readonly IServiceProviderIsKeyedService _keyedServices;
-
-    public RoutinesOptionsValidator(IServiceProviderIsKeyedService keyedServices) => _keyedServices = keyedServices;
-
     public ValidateOptionsResult Validate(string? name, RoutinesOptions options)
     {
         var errors = new List<string>();
@@ -37,7 +32,7 @@ public sealed class RoutinesOptionsValidator : IValidateOptions<RoutinesOptions>
 
             if (string.IsNullOrWhiteSpace(routine.Service))
                 errors.Add($"{prefix}: 'Service' es obligatorio.");
-            else if (!_keyedServices.IsKeyedService(typeof(IRoutineService), routine.Service))
+            else if (!keyedServices.IsKeyedService(typeof(IRoutineService), routine.Service))
                 errors.Add($"{prefix}: no hay un IRoutineService registrado con la clave '{routine.Service}'.");
 
             if (!CronExpression.TryParse(routine.CronExpression, out _))
